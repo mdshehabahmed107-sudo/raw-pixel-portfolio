@@ -1,4 +1,3 @@
-
 import Image from "next/image";
 import {
   ArrowUpRight,
@@ -133,6 +132,22 @@ export default async function Home() {
     getContent("packages", packages),
     getPortfolio(),
   ]);
+
+  // Fixed package order: Basic → Standard → Premium
+  const packagePriority: Record<string, number> = {
+    basic: 1,
+    standard: 2,
+    premium: 3,
+  };
+
+  const orderedOffers = [...offers].sort((a, b) => {
+    const aRank =
+      packagePriority[a.title?.trim().toLowerCase()] ?? 99;
+    const bRank =
+      packagePriority[b.title?.trim().toLowerCase()] ?? 99;
+
+    return aRank - bRank;
+  });
 
   return (
     <main>
@@ -387,12 +402,12 @@ export default async function Home() {
         </div>
 
         <div className="package-grid">
-          {offers.map((p, i) => (
+          {orderedOffers.map((p, i) => (
             <article
-              className={`package-card ${i === 1 ? "popular" : ""}`}
+              className={`package-card ${p.title?.trim().toLowerCase() === "standard" ? "popular" : ""}`}
               key={p.id}
             >
-              {i === 1 && (
+              {p.title?.trim().toLowerCase() === "standard" && (
                 <span className="popular-label">POPULAR CHOICE</span>
               )}
 
@@ -414,7 +429,7 @@ export default async function Home() {
 
               <a
                 className={
-                  i === 1
+                  p.title?.trim().toLowerCase() === "standard"
                     ? "button button-yellow"
                     : "button button-outline"
                 }
