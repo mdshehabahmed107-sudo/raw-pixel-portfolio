@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useState } from "react";
@@ -40,42 +39,63 @@ export default function Admin() {
   useEffect(() => {
     if (!client) return;
 
-    client.auth.getSession().then(({ data }) => {
+    client.auth.getSession().then(({ data, error }) => {
+      if (error) {
+        setNotice(error.message);
+        return;
+      }
       setSession(data.session);
     });
 
-    const { data } = client.auth.onAuthStateChange((_e, s) => {
-      setSession(s);
+    const { data } = client.auth.onAuthStateChange((_event, currentSession) => {
+      setSession(currentSession);
     });
 
     return () => data.subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
-    if (session && client) load();
+    if (session && client) {
+      load();
+    }
   }, [session, tab]);
 
-  async function load() {
-    if (!client) return;
+  async function load(): Promise<boolean> {
+    if (!client) return false;
 
-    const { data } = await client
+    const { data, error } = await client
       .from(tab)
       .select("*")
       .order("created_at", { ascending: false });
 
-    setRows(data || []);
+    if (error) {
+      setRows([]);
+      setNotice(`Could not load ${tab}: ${error.message}`);
+      return false;
+    }
 
-    const m = await client
+    setRows((data || []) as Row[]);
+
+    const { data: messageData, error: messageError } = await client
       .from("messages")
       .select("*")
       .order("created_at", { ascending: false });
 
-    setMessages(m.data || []);
+    if (messageError) {
+      setNotice(`Messages loading error: ${messageError.message}`);
+    } else {
+      setMessages(messageData || []);
+    }
+
+    return true;
   }
 
   async function login(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!client) return;
+
+    setBusy(true);
+    setNotice("");
 
     const { error } = await client.auth.signInWithPassword({
       email,
@@ -83,32 +103,37 @@ export default function Admin() {
     });
 
     setNotice(error?.message || "");
+
+    setBusy(false);
   }
 
   async function save(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+
     if (!client) return;
 
     const form = e.currentTarget;
     setBusy(true);
+    setNotice("");
 
     try {
       const f = new FormData(form);
-      let image_url = String(f.get("image_url") || "");
-      const file = f.get("file") as File;
 
-      if (file && file.size) {
+      let image_url = String(f.get("image_url") || "");
+      const file = f.get("file") as File | null;
+
+      if (file && file.size > 0) {
         const path = `${Date.now()}-${file.name.replace(
           /[^a-zA-Z0-9._-]/g,
           "-"
         )}`;
 
-        const { error } = await client.storage
+        const { error: uploadError } = await client.storage
           .from("portfolio")
           .upload(path, file, { upsert: false });
 
-        if (error) {
-          setNotice(error.message);
+        if (uploadError) {
+          setNotice(`Image upload failed: ${uploadError.message}`);
           return;
         }
 
@@ -117,32 +142,40 @@ export default function Admin() {
           .getPublicUrl(path).data.publicUrl;
       }
 
-      const item: any = {
-        title: String(f.get("title")),
-        description: String(f.get("description")),
+      const item: Record<string, any> = {
+        title: String(f.get("title") || "").trim(),
+        description: String(f.get("description") || "").trim(),
         active: true,
       };
 
       if (tab === "packages") {
-        item.price = String(f.get("price"));
-        item.delivery = String(f.get("delivery"));
+        item.price = String(f.get("price") || "").trim();
+        item.delivery = String(f.get("delivery") || "").trim();
       }
 
       if (tab === "portfolio" || tab === "services") {
-        item.category = String(f.get("category"));
+        item.category = String(f.get("category") || "").trim();
         item.image_url = image_url;
       }
 
-      const { error } = await client.from(tab).insert(item);
+      const { error: insertError } = await client
+        .from(tab)
+        .insert(item);
 
-      setNotice(error?.message || "Saved successfully.");
+      if (insertError) {
+        setNotice(`Save failed: ${insertError.message}`);
+        return;
+      }
 
-      if (!error) {
-        form.reset();
-        await load();
+      form.reset();
+
+      const loaded = await load();
+
+      if (loaded) {
+        setNotice("Saved successfully. Your item is now in the database.");
       }
     } catch (error: any) {
-      setNotice(error.message || "Something went wrong.");
+      setNotice(error?.message || "Something went wrong.");
     } finally {
       setBusy(false);
     }
@@ -151,15 +184,20 @@ export default function Admin() {
   async function remove(id: string) {
     if (!client || !confirm("Delete this item?")) return;
 
-    const { error } = await client.from(tab).delete().eq("id", id);
+    setNotice("");
+
+    const { error } = await client
+      .from(tab)
+      .delete()
+      .eq("id", id);
 
     if (error) {
-      setNotice(error.message);
+      setNotice(`Delete failed: ${error.message}`);
       return;
     }
 
-    setNotice("Deleted successfully.");
     await load();
+    setNotice("Deleted successfully.");
   }
 
   if (!client) {
@@ -202,8 +240,8 @@ export default function Admin() {
             />
           </label>
 
-          <button className="button button-yellow">
-            Sign in ↗
+          <button className="button button-yellow" disabled={busy}>
+            {busy ? "Signing in..." : "Sign in ↗"}
           </button>
 
           {notice && <p>{notice}</p>}
@@ -227,7 +265,10 @@ export default function Admin() {
         {tabs.map((t) => (
           <button
             className={tab === t ? "selected" : ""}
-            onClick={() => setTab(t)}
+            onClick={() => {
+              setTab(t);
+              setNotice("");
+            }}
             key={t}
           >
             {t === "services"
@@ -253,7 +294,8 @@ export default function Admin() {
             <p className="eyebrow">MANAGE YOUR WEBSITE</p>
             <h1>{tab[0].toUpperCase() + tab.slice(1)}</h1>
           </div>
-          <a href="/" target="_blank">
+
+          <a href="/" target="_blank" rel="noreferrer">
             View website ↗
           </a>
         </div>
@@ -330,6 +372,8 @@ export default function Admin() {
         <div className="admin-list">
           <h2>Current {tab}</h2>
 
+          {rows.length === 0 && <p>No {tab} found.</p>}
+
           {rows.map((r) => (
             <article key={r.id}>
               {r.image_url && <img src={r.image_url} alt="" />}
@@ -337,6 +381,7 @@ export default function Admin() {
               <div>
                 <b>{r.title}</b>
                 <p>{r.description}</p>
+
                 {r.price && (
                   <small>
                     {r.price} · {r.delivery}
